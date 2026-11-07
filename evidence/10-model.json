@@ -1,0 +1,30 @@
+{
+ "object_count": 1,
+ "current_plate_index": 0,
+ "objects": [
+  {
+   "index": 0,
+   "id": 293,
+   "name": "ornamento-3-laco.stl",
+   "input_file": "/Users/fabiomsnunes/Documents/3D/ornamento-natal-foto/ornamento-3-laco.stl",
+   "instances": 1,
+   "volumes": [
+    {
+     "name": "ornamento-3-laco.stl",
+     "type": "ModelPart",
+     "extruder_id": 1,
+     "facets": 14218,
+     "config": {}
+    }
+   ],
+   "bounding_box": {
+    "min": [
+     96.0,
+     97.099609375,
+     0.0
+    ],
+    "max": [
+     160.0,
+     158.900390625,
+     3.4000000953674316
+    ],

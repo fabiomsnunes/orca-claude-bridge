@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""CLI for the Claude Bridge plugin running inside OrcaSlicer 2.5.0.
+
+Standard library only (Python 3.9+). Reads the port and token from the
+plugin's bridge.json under ~/Library/Application Support/OrcaSlicer/orca_plugins
+(override with ORCA_BRIDGE_INFO=/path/to/bridge.json) and only connects to
+127.0.0.1. Prints the bridge's JSON reply; exits 1 on an error.
+
+  orca-bridge status
+  orca-bridge app-info
+  orca-bridge project-path
+  orca-bridge presets
+  orca-bridge get <process|printer|filament> <key> [--slot N]
+  orca-bridge keys <process|printer|filament> [--slot N]
+  orca-bridge config <key>             effective (merged) value
+  orca-bridge config-keys
+  orca-bridge model
+  orca-bridge set <process|printer|filament> key=value [key=value ...] [--slot N] [--preset NAME]
+
+`set` edits the live preset through Orca's GUI edit path; it never saves to disk.
+Values are Orca's serialized strings (numbers plain, "15%", booleans 1/0, enums by
+internal key, lists ';'-separated).
+"""
+
+import argparse
+import glob
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DATA_DIR = os.path.expanduser("~/Library/Application Support/OrcaSlicer")
+CATEGORIES = ("process", "printer", "filament")
+
+
+def bridge_info():
+    override = os.environ.get("ORCA_BRIDGE_INFO")
+    pattern = os.path.join(DATA_DIR, "orca_plugins", "**", "bridge.json")
+    candidates = [override] if override else glob.glob(pattern, recursive=True)
+    candidates = [c for c in candidates if c and os.path.isfile(c)]
+    if not candidates:
+        raise SystemExit("Claude Bridge is not running: in OrcaSlicer open Plugins and Run \"Claude Bridge\".")
+    with open(max(candidates, key=os.path.getmtime), encoding="utf-8") as handle:
+        info = json.load(handle)
+    if info.get("host") != "127.0.0.1":
+        raise SystemExit("bridge.json names a host other than 127.0.0.1; refusing to connect")
+    return info
+
+
+def call(method, path, body=None):
+    info = bridge_info()
+    request = urllib.request.Request(
+        "http://127.0.0.1:%d%s" % (int(info["port"]), path),
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={"Authorization": "Bearer " + info["token"], "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return 0, json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            return 1, json.loads(error.read())
+        except ValueError:
+            return 1, {"error": "HTTP %d" % error.code}
+    except urllib.error.URLError as error:
+        return 1, {"error": "cannot reach the bridge (is Orca open and Claude Bridge running?): %s" % error.reason}
+
+
+def query(**params):
+    clean = {k: v for k, v in params.items() if v is not None}
+    return "?" + urllib.parse.urlencode(clean) if clean else ""
+
+
+def parse_assignments(pairs):
+    values = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            raise SystemExit("expected key=value, got %r" % pair)
+        values[key] = value
+    return values
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="orca-bridge", description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("status", "app-info", "project-path", "presets", "config-keys", "model"):
+        sub.add_parser(name)
+    get = sub.add_parser("get")
+    get.add_argument("category", choices=CATEGORIES)
+    get.add_argument("key")
+    get.add_argument("--slot", type=int)
+    keys = sub.add_parser("keys")
+    keys.add_argument("category", choices=CATEGORIES)
+    keys.add_argument("--slot", type=int)
+    config = sub.add_parser("config")
+    config.add_argument("key")
+    setp = sub.add_parser("set")
+    setp.add_argument("category", choices=CATEGORIES)
+    setp.add_argument("assignments", nargs="+", metavar="key=value")
+    setp.add_argument("--slot", type=int, help="1-based filament slot (required for filament)")
+    setp.add_argument("--preset", default="", help="switch to this preset first (may open Orca's unsaved-changes dialog)")
+    args = parser.parse_args(argv)
+
+    simple = {
+        "status": "/health", "app-info": "/app_info", "project-path": "/project_path",
+        "presets": "/presets", "config-keys": "/config/keys", "model": "/model",
+    }
+    if args.command in simple:
+        code, result = call("GET", simple[args.command])
+    elif args.command == "get":
+        code, result = call("GET", "/preset/%s%s" % (args.category, query(key=args.key, slot=args.slot)))
+    elif args.command == "keys":
+        code, result = call("GET", "/preset/%s/keys%s" % (args.category, query(slot=args.slot)))
+    elif args.command == "config":
+        code, result = call("GET", "/config" + query(key=args.key))
+    else:
+        body = {"values": parse_assignments(args.assignments), "preset_name": args.preset}
+        if args.slot is not None:
+            body["slot"] = args.slot
+        code, result = call("POST", "/preset/" + args.category, body)
+
+    json.dump(result, sys.stdout, indent=1, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

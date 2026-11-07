@@ -1,0 +1,7 @@
+{
+ "category": "process",
+ "preset": "0.20mm Standard @Elegoo CC2 0.4 nozzle",
+ "is_dirty": false,
+ "key": "layer_height",
+ "value": "0.2"
+}

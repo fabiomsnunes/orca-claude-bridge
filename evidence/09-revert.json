@@ -1,0 +1,12 @@
+{
+ "category": "process",
+ "target_name": "0.20mm Standard @Elegoo CC2 0.4 nozzle",
+ "selection_changed": false,
+ "slot_number": -1,
+ "shared_slots": [],
+ "keys": [
+  "layer_height"
+ ],
+ "dirty": false,
+ "saved_to_disk": false
+}

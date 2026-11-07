@@ -1,0 +1,107 @@
+{
+ "process": {
+  "selected": "0.20mm Standard @Elegoo CC2 0.4 nozzle",
+  "edited": {
+   "name": "0.20mm Standard @Elegoo CC2 0.4 nozzle",
+   "alias": "0.20mm Standard",
+   "label": "0.20mm Standard",
+   "is_dirty": false,
+   "is_system": true,
+   "is_user": false,
+   "is_default": false,
+   "is_compatible": true,
+   "is_project_embedded": false
+  }
+ },
+ "printer": {
+  "selected": "Elegoo Centauri Carbon 2 0.4 nozzle - Copy",
+  "edited": {
+   "name": "Elegoo Centauri Carbon 2 0.4 nozzle - Copy",
+   "alias": "Elegoo Centauri Carbon 2 0.4 nozzle - Copy",
+   "label": "Elegoo Centauri Carbon 2 0.4 nozzle - Copy",
+   "is_dirty": false,
+   "is_system": false,
+   "is_user": true,
+   "is_default": false,
+   "is_compatible": true,
+   "is_project_embedded": false
+  }
+ },
+ "filament": {
+  "edited": {
+   "name": "Amazon PLA Preto @CC2",
+   "alias": "Amazon PLA Preto @CC2",
+   "label": "Amazon PLA Preto @CC2",
+   "is_dirty": false,
+   "is_system": false,
+   "is_user": true,
+   "is_default": false,
+   "is_compatible": true,
+   "is_project_embedded": false
+  },
+  "slots": [
+   {
+    "slot": 1,
+    "name": "Amazon PLA Preto @CC2",
+    "preset": {
+     "name": "Amazon PLA Preto @CC2",
+     "alias": "Amazon PLA Preto @CC2",
+     "label": "Amazon PLA Preto @CC2",
+     "is_dirty": false,
+     "is_system": false,
+     "is_user": true,
+     "is_default": false,
+     "is_compatible": true,
+     "is_project_embedded": false
+    }
+   },
+   {
+    "slot": 2,
+    "name": "Generic PLA @Elegoo Centauri",
+    "preset": {
+     "name": "Generic PLA @Elegoo Centauri",
+     "alias": "Generic PLA",
+     "label": "Generic PLA",
+     "is_dirty": false,
+     "is_system": true,
+     "is_user": false,
+     "is_default": false,
+     "is_compatible": true,
+     "is_project_embedded": false
+    }
+   },
+   {
+    "slot": 3,
+    "name": "Generic PLA @Elegoo Centauri",
+    "preset": {
+     "name": "Generic PLA @Elegoo Centauri",
+     "alias": "Generic PLA",
+     "label": "Generic PLA",
+     "is_dirty": false,
+     "is_system": true,
+     "is_user": false,
+     "is_default": false,
+     "is_compatible": true,
+     "is_project_embedded": false
+    }
+   },
+   {
+    "slot": 4,
+    "name": "Generic PLA @Elegoo Centauri",
+    "preset": {
+     "name": "Generic PLA @Elegoo Centauri",
+     "alias": "Generic PLA",
+     "label": "Generic PLA",
+     "is_dirty": false,
+     "is_system": true,
+     "is_user": false,
+     "is_default": false,
+     "is_compatible": true,
+     "is_project_embedded": false
+    }
+   }
+  ]
+ },
+ "is_presets_dirty": false,
+ "is_project_dirty": true
+}
