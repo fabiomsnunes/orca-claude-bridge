@@ -1,8 +1,12 @@
 # orca-claude-bridge
 
-Proof of concept: Claude Code reads and changes the live settings of OrcaSlicer 2.5.0 on
-Fábio's Mac (Elegoo Centauri Carbon 2 + Canvas) while the GUI is open, through the Python
-plugin API that 2.5.0 introduced.
+Proof of concept: Claude Code reads and changes the live settings of OrcaSlicer 2.5.0 on a
+Mac (tested with an Elegoo Centauri Carbon 2 + Canvas) while the GUI is open, through the
+Python plugin API that 2.5.0 introduced.
+
+> **Status:** it works, and I use it day to day. OrcaSlicer is expected to ship its own MCP
+> server; once it does, use that instead. This repo stays as a working example of the 2.5.0
+> plugin API.
 
 ```
 Claude Code ──Bash──> ./orca-bridge (CLI, stdlib) ──HTTP 127.0.0.1:47651 + token──> plugin inside Orca
@@ -65,7 +69,7 @@ internal key, and lists separated by `;`. `./orca-bridge keys <category>` lists 
 | Change settings | `orca.host.preset.{process,printer,filament}.begin_update()` → `set()` → `commit()`, which is the same path as editing the field in the GUI (`Tab::apply_preset_config_values`). This runs validation and `on_change` and sets the dirty marker. |
 
 **Writes never save to disk.** The preset API has no save call. The edited preset stays
-marked as modified until Fábio saves or discards it in Orca. An invalid key or value fails at
+marked as modified until you save or discard it in Orca. An invalid key or value fails at
 `commit()` and nothing in the batch is applied.
 
 Passing `--preset NAME` to `set` switches preset first, through Orca's normal selection flow.
@@ -93,7 +97,7 @@ no dialog appears.
 ## Security
 
 - Binds 127.0.0.1 only, on the first free port from 47651 to 47660 (8765 is already taken on
-  this Mac by another local Python service). The port it actually used is in `bridge.json`.
+  the Mac it was built on by another local Python service). The port it actually used is in `bridge.json`.
 - Requests need `Authorization: Bearer <token>`. The token is random on
   every Run and written to `bridge.json` in the plugin's storage folder under
   `~/Library/Application Support/OrcaSlicer/orca_plugins/`.
