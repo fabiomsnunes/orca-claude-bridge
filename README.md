@@ -1,6 +1,6 @@
 # orca-claude-bridge
 
-Proof of concept: Claude Code reads and changes the live settings of OrcaSlicer 2.5.0 on a
+Proof of concept: Claude Code reads and changes the live settings of OrcaSlicer 2.5 on a
 Mac (tested with an Elegoo Centauri Carbon 2 + Canvas) while the GUI is open, through the
 Python plugin API that 2.5.0 introduced.
 
@@ -12,9 +12,9 @@ Python plugin API that 2.5.0 introduced.
 Claude Code ──Bash──> ./orca-bridge (CLI, stdlib) ──HTTP 127.0.0.1:47651 + token──> plugin inside Orca
 ```
 
-- `plugin/orca_claude_bridge.py`: Orca Script plugin ("Claude Bridge"). Its `async def
-  execute` never returns: it serves HTTP/JSON on 127.0.0.1 from the Script worker's asyncio
-  loop.
+- `plugin/orca_claude_bridge.py`: Orca Script plugin ("Claude Bridge"). It starts on its
+  own at the first project or preset event after Orca opens and serves HTTP/JSON on
+  127.0.0.1. Its dock panel has an **Optimise** button that starts an optimiser you provide.
 - `orca-bridge`: the CLI Claude calls from Bash. Python 3.9+, standard library only.
 
 ## Why this works (checked in the v2.5.0 source)
@@ -31,10 +31,26 @@ Claude Code ──Bash──> ./orca-bridge (CLI, stdlib) ──HTTP 127.0.0.1:4
   A canonical `scheme://host` grant covers raw sockets to that host on every port, which
   includes `socket.bind`. Nothing else is requested.
 
+## Autostart (2.5.2)
+
+Orca 2.5.2 calls `on_lifecycle_event` on every loaded capability, on the UI thread for project
+and preset events. The first `NewProject`, `ProjectOpened`, `PresetSelected`, `ObjectAdded` or
+`PlateSelected` after Orca opens creates the dock panel (it must be created on the UI thread)
+and starts the server on a thread of its own with its own asyncio loop. `on_unload` cancels it.
+This needs the `threading` permission. Clicking Run still works and does the same by hand.
+
+## Optimise button
+
+The panel's **Optimise** button starts `~/.local/bin/orca-optimise`, an executable you write.
+The plugin only starts it (one run at a time, nothing runs until the button is pressed) and
+passes `ORCA_BRIDGE_INFO` in the environment. A typical optimiser runs a headless agent such as
+`claude -p` that reads the model through the bridge, exports a copy with `export-3mf`, slices
+variants headless, applies the best settings with `set`, and reports with `log`.
+
 ## Using it
 
 1. In Orca: Plugins → Install local plugin → `plugin/orca_claude_bridge.py`, accept the
-   network prompt (127.0.0.1), enable it, then click Run on "Claude Bridge". A small
+   permission prompts, enable it, and restart Orca (or click Run on "Claude Bridge"). A small
    "Claude Bridge" panel docks on the right while it is serving.
 2. From Bash:
 
@@ -49,6 +65,8 @@ Claude Code ──Bash──> ./orca-bridge (CLI, stdlib) ──HTTP 127.0.0.1:4
 ./orca-bridge project-path
 ./orca-bridge set process layer_height=0.16 wall_loops=3
 ./orca-bridge set filament --slot 1 nozzle_temperature=225
+./orca-bridge export-3mf ~/Library/Caches/orca-claude-bridge/copy.3mf   # copy of the open project
+./orca-bridge log "text"                    # show a line in the panel
 ```
 
 Output is JSON. The exit code is 1 when there is an error.
@@ -66,6 +84,7 @@ internal key, and lists separated by `;`. `./orca-bridge keys <category>` lists 
 | One setting of the live preset | `Preset.config_value(key)` on the edited preset (or the filament slot's preset) |
 | Effective merged config | `preset_bundle().full_config_value(key)` |
 | Plate contents | `orca.host.model()`: objects, instances, volumes (type, extruder), bboxes, per-object/volume config overrides |
+| Copy of the open project | `plater().export_3mf_copy(path)` on the UI thread, unsaved changes included; only into `~/Library/Caches/orca-claude-bridge` |
 | Change settings | `orca.host.preset.{process,printer,filament}.begin_update()` → `set()` → `commit()`, which is the same path as editing the field in the GUI (`Tab::apply_preset_config_values`). This runs validation and `on_change` and sets the dirty marker. |
 
 **Writes never save to disk.** The preset API has no save call. The edited preset stays
@@ -79,9 +98,8 @@ no dialog appears.
 
 ## What it cannot do (2.5.0 bindings)
 
-- **No load model, slice, or export G-code/3MF from a Script.** The bindings have no
-  load-model or slice call. `plater().export_3mf_copy()` exists but requires the UI thread
-  and writes a file, so it is left out of this PoC.
+- **No load model or slice from a Script.** The bindings have no load-model or slice call,
+  so an optimiser slices the exported copy with the OrcaSlicer CLI.
 - **No saving, creating or deleting presets**, and no per-object setting changes (the model
   bindings are read-only).
 - **No setting changes on objects/modifiers**, no arranging and no moving objects.
@@ -92,7 +110,7 @@ no dialog appears.
   To get the panel back, untick Activate, tick it again and click Run.
 - While a `set` that switches preset waits on Orca's dialog, the server answers nothing else
   (it is one thread).
-- You must click Run after each Orca start. The 2.5.0 API has no autostart for a Script.
+- Autostart needs 2.5.2's lifecycle events; on 2.5.0 click Run after each Orca start.
 
 ## Security
 
@@ -104,8 +122,11 @@ no dialog appears.
 - Rejects any `Host` header other than `127.0.0.1`/`localhost`, which stops DNS-rebinding
   from a web page.
 - The CLI refuses a `bridge.json` that names a host other than 127.0.0.1.
-- Orca's audit hook is a Python policy, not an OS sandbox. The plugin only asks for the
-  127.0.0.1 network grant.
+- Orca's audit hook is a Python policy, not an OS sandbox. The plugin asks for: the 127.0.0.1
+  network grant, starting `~/.local/bin/orca-optimise` only, writing only inside
+  `~/Library/Caches/orca-claude-bridge`, and threading (for autostart).
+- The optimiser runs with your user rights. Keep it narrow: the plugin never passes it any
+  input from the network.
 
 ## Notes for the next change
 
