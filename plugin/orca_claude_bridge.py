@@ -6,14 +6,16 @@
 # name = "Claude Bridge"
 # description = "Local HTTP bridge on 127.0.0.1 that lets Claude Code read the open project and edit the active presets (never saved to disk)."
 # author = "WPlus"
-# version = "0.1.2"
+# version = "0.3.0"
 # ///
 """Claude Bridge: a local HTTP/JSON server inside OrcaSlicer 2.5.0.
 
-Run "Claude Bridge" once from the Plugins dialog. The Script capability's
-``async def execute`` never returns: it serves 127.0.0.1 on the background
-Script worker's asyncio loop until the plugin is disabled, unloaded or Orca
-quits (all of which cancel the task at its next ``await``).
+The bridge starts on its own at the first project or preset event after Orca
+opens (a model opened, a preset selected): ``on_lifecycle_event`` arrives on the
+UI thread, creates the dock panel there and serves 127.0.0.1 from a thread of
+its own. Running "Claude Bridge" from the Plugins dialog does the same by hand:
+its ``async def execute`` serves on the Script worker's loop until the plugin is
+disabled, unloaded or Orca quits.
 
 Endpoints (all JSON, all need ``Authorization: Bearer <token>``):
 
@@ -27,6 +29,12 @@ Endpoints (all JSON, all need ``Authorization: Bearer <token>``):
   GET  /config/keys
   GET  /model                           objects on the plate
   POST /preset/<category>               {"values": {...}, "preset_name": "", "slot": 1}
+  POST /export_3mf                      {"path": "<OPTIMISE_DIR>/x.3mf"} copy of the open project
+  POST /panel/log                       {"text": "..."} show a line in the panel
+
+The panel's "Optimise" button starts OPTIMISER (an executable you provide, e.g. a script
+that runs a headless agent against this bridge). The plugin only starts it; nothing runs
+until the button is pressed, and only one run at a time.
 
 The token and port are written to ``bridge.json`` in the plugin's storage
 folder, where the MCP server reads them.
@@ -46,6 +54,8 @@ import asyncio
 import collections
 import json
 import os
+import subprocess
+import threading
 import time
 import urllib.parse
 
@@ -57,16 +67,20 @@ FIRST_PORT = int(os.environ.get("ORCA_CLAUDE_BRIDGE_PORT", "47651"))
 PORT_ATTEMPTS = 10
 UI_TIMEOUT_S = 5.0
 CATEGORIES = ("process", "printer", "filament")
+OPTIMISER = os.path.expanduser("~/.local/bin/orca-optimise")
+OPTIMISE_DIR = os.path.expanduser("~/Library/Caches/orca-claude-bridge")
 
 PANEL_HTML = """
 <style>
   body { margin: 0; padding: 10px; font-size: 12px; }
   h3 { margin: 0 0 6px; font-size: 13px; }
   #status, #log { color: var(--orca-muted); }
+  #optimise { margin-top: 8px; width: 100%; padding: 6px; font-size: 12px; cursor: pointer; }
   #log { margin-top: 8px; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 11px; }
 </style>
 <h3>Claude Bridge</h3>
 <div id="status">Starting...</div>
+<button id="optimise">Optimise</button>
 <div id="log"></div>
 <script>
 (function () {
@@ -78,8 +92,11 @@ PANEL_HTML = """
     } else if (message.command === "status") {
       document.getElementById("status").textContent = message.text;
     } else if (message.command === "log") {
-      log.textContent = (message.text + "\\n" + log.textContent).split("\\n").slice(0, 12).join("\\n");
+      log.textContent = (message.text + "\\n" + log.textContent).split("\\n").slice(0, 24).join("\\n");
     }
+  });
+  document.getElementById("optimise").addEventListener("click", function () {
+    orca.postMessage({ command: "optimise" });
   });
   // Fallback in case a "pump" post is dropped (e.g. sent before the page loaded).
   setInterval(function () { orca.postMessage({ command: "pump" }); }, 1000);
@@ -104,6 +121,7 @@ class UiPump:
         self.loop = None
         self.jobs = collections.deque()
         self.status_text = "Starting..."
+        self.on_optimise = None
 
     def is_open(self):
         try:
@@ -117,6 +135,8 @@ class UiPump:
         if command == "ready" and self.panel is not None:
             # A post made before the page loaded can be dropped, so resend the status on load.
             self.panel.post({"command": "status", "text": self.status_text})
+        if command == "optimise" and self.on_optimise is not None:
+            self.on_optimise()
         if command in ("pump", "ready"):
             self.drain()
 
@@ -337,11 +357,38 @@ def _serialize(value):
 # HTTP
 # ---------------------------------------------------------------------------
 
+def export_3mf(path):
+    path = os.path.realpath(os.path.expanduser(str(path)))
+    if not path.startswith(OPTIMISE_DIR + os.sep) or not path.endswith(".3mf"):
+        raise HttpError(400, f"path must be a .3mf inside {OPTIMISE_DIR}")
+    orca.host.plater().export_3mf_copy(path)
+    return {"path": path}
+
+
 class Bridge:
     def __init__(self, token):
         self.token = token
         self.port = None
         self.pump = UiPump()
+        self.pump.on_optimise = self.start_optimiser
+        self.info_path = None
+        self.optimiser = None
+
+    # UI thread (panel button).
+    def start_optimiser(self):
+        stamp = time.strftime("%H:%M:%S")
+        if self.optimiser is not None and self.optimiser.poll() is None:
+            self.pump.post({"command": "log", "text": f"{stamp} optimiser already running"})
+            return
+        if not os.access(OPTIMISER, os.X_OK):
+            self.pump.post({"command": "log", "text": f"{stamp} no optimiser at {OPTIMISER}"})
+            return
+        env = dict(os.environ, ORCA_BRIDGE_INFO=self.info_path or "")
+        self.optimiser = subprocess.Popen(
+            [OPTIMISER], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        self.pump.post({"command": "log", "text": f"{stamp} optimiser started"})
 
     def allowed_hosts(self):
         return {f"127.0.0.1:{self.port}", f"localhost:{self.port}", "127.0.0.1", "localhost"}
@@ -405,6 +452,11 @@ class Bridge:
                     return await run(lambda: read_preset_keys(category, slot))
                 if len(parts) == 2:
                     return await run(lambda: read_preset_value(category, _required(query, "key"), slot))
+        elif method == "POST" and parts == ["export_3mf"]:
+            return await run(lambda: export_3mf(_required(data, "path")))
+        elif method == "POST" and parts == ["panel", "log"]:
+            self.pump.post({"command": "log", "text": str(_required(data, "text"))[:400]})
+            return {"ok": True}
         elif method == "POST" and len(parts) == 2 and parts[0] == "preset" and parts[1] in CATEGORIES:
             result = write_preset(parts[1], data)
             self.pump.post({"command": "log", "text": f"{time.strftime('%H:%M:%S')} set {result['category']}: {', '.join(result['keys'])}"})
@@ -449,45 +501,98 @@ async def _start_server(bridge):
     raise last_error
 
 
+AUTOSTART_EVENTS = {"NewProject", "ProjectOpened", "PresetSelected", "ObjectAdded", "PlateSelected"}
+
+
+async def serve(bridge):
+    """Serve until cancelled. The caller has set bridge.pump.loop and, on the UI thread, the panel."""
+    bridge.pump.loop = asyncio.get_running_loop()
+    server = await _start_server(bridge)
+    with open(bridge.info_path, "w", encoding="utf-8") as handle:
+        json.dump({"host": HOST, "port": bridge.port, "token": bridge.token, "pid": os.getpid()}, handle)
+    bridge.pump.status_text = f"Serving http://{HOST}:{bridge.port}"
+    bridge.pump.post({"command": "status", "text": bridge.pump.status_text})
+    print(f"[claude-bridge] serving http://{HOST}:{bridge.port}, token in {bridge.info_path}", flush=True)
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        try:
+            os.replace(bridge.info_path, bridge.info_path + ".stopped")
+        except OSError:
+            pass
+        print("[claude-bridge] stopped", flush=True)
+
+
+def open_panel(bridge):
+    bridge.pump.panel = orca.host.ui.create_dock_panel(
+        html=PANEL_HTML, title="Claude Bridge", width=260, height=320,
+        on_message=bridge.pump.on_message, on_close=bridge.pump.on_close, dock="right",
+    )
+
+
+def new_bridge():
+    bridge = Bridge(os.urandom(24).hex())
+    bridge.info_path = os.path.join(orca.host.plugin.storage(), "bridge.json")
+    return bridge
+
+
 class ClaudeBridge(orca.script.ScriptPluginCapabilityBase):
     running = False
+    background = None   # (thread, loop, task) of the autostarted server
 
     def get_name(self):
         return "Claude Bridge"
 
+    # UI thread: project and preset events are fired from the GUI.
+    def on_lifecycle_event(self, event, context):
+        if ClaudeBridge.running or str(event).split(".")[-1] not in AUTOSTART_EVENTS:
+            return
+        bridge = new_bridge()
+        try:
+            open_panel(bridge)
+        except Exception as error:   # not on the UI thread or the 3D view not ready yet: try on the next event
+            print(f"[claude-bridge] autostart postponed: {error}", flush=True)
+            return
+        ClaudeBridge.running = True
+        loop = asyncio.new_event_loop()
+        task_box = {}
+
+        def run():
+            asyncio.set_event_loop(loop)
+            task_box["task"] = loop.create_task(serve(bridge))
+            try:
+                loop.run_until_complete(task_box["task"])
+            except BaseException as error:   # cancelled on unload, or the server failed to start
+                print(f"[claude-bridge] background server ended: {error!r}", flush=True)
+            finally:
+                ClaudeBridge.running = False
+                loop.close()
+
+        thread = threading.Thread(target=run, name="claude-bridge", daemon=True)
+        ClaudeBridge.background = (thread, loop, task_box)
+        thread.start()
+
+    def on_unload(self):
+        background, ClaudeBridge.background = ClaudeBridge.background, None
+        if background:
+            thread, loop, task_box = background
+            if "task" in task_box and not loop.is_closed():
+                loop.call_soon_threadsafe(task_box["task"].cancel)
+            thread.join(timeout=5)
+
     async def execute(self):
         if ClaudeBridge.running:
             return orca.ExecutionResult.success("Claude Bridge is already running")
-
-        token = os.urandom(24).hex()
-        bridge = Bridge(token)
-        bridge.pump.loop = asyncio.get_running_loop()
-        info_path = os.path.join(orca.host.plugin.storage(), "bridge.json")
-
-        server = await _start_server(bridge)
-        PORT = bridge.port
+        bridge = new_bridge()
         ClaudeBridge.running = True
         try:
-            with open(info_path, "w", encoding="utf-8") as handle:
-                json.dump({"host": HOST, "port": PORT, "token": token, "pid": os.getpid()}, handle)
-            bridge.pump.status_text = f"Serving http://{HOST}:{PORT}"
-            bridge.pump.panel = orca.host.ui.create_dock_panel(
-                html=PANEL_HTML, title="Claude Bridge", width=260, height=200,
-                on_message=bridge.pump.on_message, on_close=bridge.pump.on_close, dock="right",
-            )
-            bridge.pump.post({"command": "status", "text": f"Serving http://{HOST}:{PORT}"})
-            print(f"[claude-bridge] serving http://{HOST}:{PORT}, token in {info_path}", flush=True)
-            async with server:
-                await server.serve_forever()
+            open_panel(bridge)
+            await serve(bridge)
         finally:
             ClaudeBridge.running = False
-            try:
-                os.replace(info_path, info_path + ".stopped")
-            except OSError:
-                pass
             if bridge.pump.is_open():
                 bridge.pump.panel.close()
-            print("[claude-bridge] stopped", flush=True)
         return orca.ExecutionResult.success("Claude Bridge stopped")
 
 
@@ -495,5 +600,8 @@ class ClaudeBridge(orca.script.ScriptPluginCapabilityBase):
 class ClaudeBridgePlugin(orca.base):
     def register_capabilities(self):
         # A canonical scheme://host grant covers raw sockets to that host on every port.
-        orca.request_permissions(network=["http://127.0.0.1"])
+        orca.request_permissions(
+            network=["http://127.0.0.1"], process=[OPTIMISER], fs_readwrite=[OPTIMISE_DIR + "/*"],
+            threading=True,
+        )
         orca.register_capability(ClaudeBridge)

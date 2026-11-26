@@ -16,6 +16,8 @@ plugin's bridge.json under ~/Library/Application Support/OrcaSlicer/orca_plugins
   orca-bridge config-keys
   orca-bridge model
   orca-bridge set <process|printer|filament> key=value [key=value ...] [--slot N] [--preset NAME]
+  orca-bridge export-3mf PATH          copy of the open project (PATH inside ~/Library/Caches/orca-claude-bridge)
+  orca-bridge log TEXT                 show a line in the Claude Bridge panel
 
 `set` edits the live preset through Orca's GUI edit path; it never saves to disk.
 Values are Orca's serialized strings (numbers plain, "15%", booleans 1/0, enums by
@@ -103,6 +105,10 @@ def main(argv=None):
     setp.add_argument("assignments", nargs="+", metavar="key=value")
     setp.add_argument("--slot", type=int, help="1-based filament slot (required for filament)")
     setp.add_argument("--preset", default="", help="switch to this preset first (may open Orca's unsaved-changes dialog)")
+    export = sub.add_parser("export-3mf")
+    export.add_argument("path")
+    log = sub.add_parser("log")
+    log.add_argument("text")
     args = parser.parse_args(argv)
 
     simple = {
@@ -117,6 +123,10 @@ def main(argv=None):
         code, result = call("GET", "/preset/%s/keys%s" % (args.category, query(slot=args.slot)))
     elif args.command == "config":
         code, result = call("GET", "/config" + query(key=args.key))
+    elif args.command == "export-3mf":
+        code, result = call("POST", "/export_3mf", {"path": os.path.abspath(os.path.expanduser(args.path))})
+    elif args.command == "log":
+        code, result = call("POST", "/panel/log", {"text": args.text})
     else:
         body = {"values": parse_assignments(args.assignments), "preset_name": args.preset}
         if args.slot is not None:
